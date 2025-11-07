@@ -32,7 +32,8 @@ class ShapleyExplainer:
                 Shape should be (n_background, n_features).
         """
         # TODO: Store `model` and `background_dataset` on `self`.
-        raise NotImplementedError("Initialize and store model and background dataset.")
+        self.model = model
+        self.background_dataset = background_dataset
 
     def shapley_values(self, X: np.ndarray) -> np.ndarray:
         """Compute Shapley values for each instance and feature.
@@ -51,7 +52,17 @@ class ShapleyExplainer:
         #       - Compute single shapley value for feature j and instance i of X.
         #       - Store the result in the output array at [i, j].
         # 3) Return the filled Shapley array.
-        raise NotImplementedError("Compute per-instance, per-feature Shapley values.")
+        n_instances, n_features = X.shape
+        shap_values = np.zeros_like(X, dtype=float)
+
+        for i in range(n_instances):
+            for j in range(n_features):
+                shap_values[i, j] = self._compute_single_shapley_value(j, X[i])
+
+        return shap_values
+    
+    def shap_values(self, X: np.ndarray) -> np.ndarray:
+        return self.shapley_values(X)
 
     def _compute_single_shapley_value(self, feature: int, instance: np.ndarray) -> float:
         """Compute the Shapley value for a single feature in one instance.
@@ -84,8 +95,20 @@ class ShapleyExplainer:
         # Hints:
         # - To form S ∪ {feature}, concatenate the tuple with `(feature,)`.
         # - Keep computations in float to avoid integer division issues.
-        raise NotImplementedError("Implement Shapley summation over all coalitions excluding the feature.")
+        n_features = len(instance)
+        shap_value = 0.0
 
+        for s in self._get_all_other_feature_subsets(n_features, feature):
+            s_plus_feature = tuple(sorted(s + (feature,)))
+
+            without_feature = self._subset_model_approximation(s, instance)
+            with_feature = self._subset_model_approximation(s_plus_feature, instance)
+
+            weight = self._permutation_factor(n_features, len(s))
+            shap_value += weight * (with_feature - without_feature)
+
+        return shap_value
+    
     def _get_all_subsets(self, items: list[int]) -> Iterable[tuple[int, ...]]:
         """Generate all subsets of a list.
 
@@ -102,7 +125,7 @@ class ShapleyExplainer:
         # Hints:
         # - Use `itertools.combinations(items, r)` inside a generator expression.
         # - You can flatten with `itertools.chain.from_iterable(...)`.
-        raise NotImplementedError("Return an iterator over all subsets of the given items.")
+        return chain.from_iterable(combinations(items, r) for r in range(len(items) + 1))
 
     def _get_all_other_feature_subsets(self, n_features: int, feature_of_interest: int) -> Iterable[tuple[int, ...]]:
         """Generate all subsets of features excluding the feature of interest.
@@ -122,7 +145,8 @@ class ShapleyExplainer:
         # 2) Return all subsets of that list by calling `_get_all_subsets(...)`.
         # Hints:
         # - A list comprehension over range(n_features) works well for step (1).
-        raise NotImplementedError("Generate subsets of all features except the feature of interest.")
+        other_features = [i for i in range(n_features) if i != feature_of_interest]
+        return self._get_all_subsets(other_features)
 
     def _permutation_factor(self, n_features: int, n_subset: int) -> float:
         """Compute the permutation weighting factor for a subset.
@@ -146,8 +170,8 @@ class ShapleyExplainer:
         # 2) Return the resulting float.
         # Hints:
         # - Use `math.factorial` imported above.
-        raise NotImplementedError("Compute Shapley permutation weight for a subset size.")
-
+        return factorial(n_subset) * factorial(n_features - n_subset - 1) / factorial(n_features)
+    
     def _subset_model_approximation(self, feature_subset: tuple[int, ...], instance: np.ndarray) -> float:
         """Approximate the model output conditioned on a subset of features.
 
@@ -177,4 +201,11 @@ class ShapleyExplainer:
         # Hints:
         # - Column assignment can broadcast a scalar to all rows in NumPy.
         # - Some models return shape (n,) and others (n, 1); take the mean robustly.
-        raise NotImplementedError("Approximate conditional expectation via background overwriting.")
+        modified_background = self.background_dataset.copy()
+
+        for j in feature_subset:
+            modified_background[:, j] = instance[j]
+
+        preds = self.model(modified_background)
+        preds = np.asarray(preds).reshape(-1)
+        return float(np.mean(preds))
